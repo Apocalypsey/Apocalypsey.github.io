@@ -12,7 +12,21 @@ layout: default
 				<h2>{{- page.title -}}</h2>
 				<p>{% if page.author %}{{ page.author }}, {% endif %}{{- page.date | date_to_long_string -}}</p>
 			</header>
-	    {{- content -}}
+			{{- content -}}
+			<div id="gitmentContainer"></div>
+			<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+			<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+			<script>
+			var gitment = new Gitment({
+					owner: '592642449@qq.com',
+					repo: 'Apocalypsey.github.io',
+					oauth: {
+							client_id: '7ab9bd2beac853dc8102',
+							client_secret: '98dd926eecdd24efab63b5c65d0375dc6bfb1003',
+					},
+			});
+			gitment.render('gitmentContainer');
+			</script>
 	  </div>
 	</article>
 </div>
