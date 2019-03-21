@@ -1,0 +1,54 @@
+---
+layout: post
+date: 2019-03-21 15:27:50 +0800
+categories: jekyll update
+title: spark redis性能优化踩坑小记
+author: 小小小罗
+catalog: true
+---
+
+最近接手了同事的一部分代码，是对各种特征的离线计算和写入redis，我进行管理和二次开发，在系统中做成天极任务每天定时跑。项目部署完跑起来后发现这个任务跑的时间实在是太久太久了，那没办法，优化呗。
+
+### 原始版本
+```scala
+userWorkDF.toJSON.foreach { record =>
+    val recordJson = JSON.parseObject(record)
+    val uid = recordJson.getString("uid")
+    val work_id = recordJson.getString("work_id")
+    val uid_key = date_key + '_' + uid
+    val jedis = BDWGRedisUtils.pool.getResource
+    jedis.auth(conf.getString("redis_bdwg.password"))
+    jedis.sadd(date_key, uid_key)
+    var finalStr = ""
+    val featureMap = new util.HashMap[String,String]
+    if(jedis.hexists(uid_key, work_id)) {
+        val existStr = jedis.hget(uid_key, work_id)
+        val existFeature = JSON.parseObject(existStr)
+        for (elem <- columnList) {
+            val value = recordJson.getDouble(elem)
+            val key = columnMap.get(elem)
+            if (value > 0.0) {
+                featureMap.put(key, value.toString)
+            }
+        }
+        val keys = existFeature.keySet().iterator()
+        while (keys.hasNext) {
+            val key = keys.next()
+            featureMap.put(key, existFeature.getString(key))
+        }
+    } else {
+        for (elem <- columnList) {
+            val value = recordJson.getDouble(elem)
+            val key = columnMap.get(elem)
+            if (value > 0.0) {
+                featureMap.put(key, value.toString)
+            }
+        }
+    }
+    finalStr = JSON.toJSONString(featureMap, SerializerFeature.EMPTY: _*)
+    jedis.hset(uid_key, work_id, finalStr)
+    jedis.expire(uid_key, conf.getInt("redis_bdwg.key.expire"))
+    jedis.expire(date_key, conf.getInt("redis_bdwg.key.expire"))
+    BDWGRedisUtils.pool.returnResource(jedis)
+}
+```

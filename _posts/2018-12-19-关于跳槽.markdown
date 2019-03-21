@@ -4,6 +4,7 @@ date: 2018-12-19 15:27:50 +0800
 categories: jekyll update
 title: 跳槽那些事
 author: 小小小罗
+catalog: true
 ---
 
 想起来好久没有更新博客了，再不更新就又要跪了，所以重新拾起来开始写新博文。
