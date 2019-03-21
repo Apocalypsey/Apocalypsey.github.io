@@ -7,10 +7,10 @@ author: 小小小罗
 catalog: true
 ---
 
-最近接手了同事的一部分代码，是对各种特征的离线计算和写入redis，我进行管理和二次开发，在系统中做成天极任务每天定时跑。项目部署完跑起来后发现这个任务跑的时间实在是太久太久了，那没办法，优化呗。
+ 最近接手了同事的一部分代码，是对各种特征的离线计算和写入redis，我进行管理和二次开发，在系统中做成天极任务每天定时跑。项目部署完跑起来后发现这个任务跑的时间实在是太久太久了，那没办法，优化呗。
 
 ### 原始版本
-```scala
+```Scala
 userWorkDF.toJSON.foreach { record =>
     val recordJson = JSON.parseObject(record)
     val uid = recordJson.getString("uid")
@@ -52,3 +52,95 @@ userWorkDF.toJSON.foreach { record =>
     BDWGRedisUtils.pool.returnResource(jedis)
 }
 ```
+分析code后发现，jedis这个对象被重复初始化使用，每次遍历都需要创建一个jedis对象，然后再进行密码验证，最后被回收掉.那么能不能把它放到循环外面，且事先构造好uid_key的Map和uid_workid_finalStr的Map呢，咱们动手试试看
+
+### version_1
+```Scala
+val jedis = BDWGRedisUtils.pool.getResource
+jedis.auth(conf.getString("redis_bdwg.password"))
+val userSet = new util.HashMap[String,String]
+val uid_work_id_Feature = new util.HashMap[String, util.HashMap[String,String]]
+userWorkDF.toJSON.foreach { record =>
+    val recordJson = JSON.parseObject(record)
+    //do something to build userSet and uid_work_id_Feature
+}
+userSet.foreach{ uid_key => 
+    jedis.sadd(uid_key, kmp)
+    jedis.hset(uid_key, uid_work_id_Feature.get(uid_key))
+}
+```
+code编写完毕，上去执行。。
+叮咚，弹出来一个Fail。。好吧，拉下日志来看看哪里出错了<br>
+org.apache.spark.SparkException: Task not serializable 
+Claused by: java.io.NotSerializableException: com.redis.RedisClient<br>
+查了一下Spark的运行图如下
+![avatar](/img/spark.jpg)
+jedis对象在Driver中初始化，userWorkDF.toJSON.foreach中的代码块会被分割到各个Worker Node里面去执行，若Worker Node需要使用到Driver中的code，则需要先进行序列化，每个Worker Node拿到序列化后的变量，在进行反序列化成对象进行使用。那么问题来来，jedis对象能否被序列化呢，答案是不能的，我们来看源码:
+```Java
+public class Jedis extends BinaryJedis implements JedisCommands, MultiKeyCommands, AdvancedJedisCommands, ScriptingCommands, BasicCommands, ClusterCommands, SentinelCommands {
+    //something
+}
+```
+由此可见，Jedis类没有实现Serializable接口，不能被序列化。再由此Spark运行图可以得出，若我们想在foreach中往实现定义好的HashMap插入数据，等foreach结束后，插入的数据并不能带出foreach代码块，这是为什么呢？因为HashMap在Driver中初始化，序列化后发送到各个Worker进行反序列化，这个是Map的一个副本，往Map中插入数据，也是在副本中插入，并不能在原始的对象中插入，所以等到foreach结束后进行reduce操作，各个Worker中的副本不能够被带出来，除非有reduce，但是reduce也是一件非常耗时的工作，若执行reduce，能否有性能上的提升，还有待商榷。<br>
+继续思考，还有没有什么能够优化，提高性能的。有～Pipeline+Partition
+### version_2 Pipeline+Partition优化
+废话不多说，先上Code
+```Scala
+pskDF.toJSON.foreachPartition(iter => {
+    val jedisp = BDWGRedisUtils.pool.getResource
+    jedisp.auth(conf.getString("redis_bdwg.password"))
+    var pip_count = 0
+    val pipe = jedisp.pipelined()
+    while(iter.hasNext) {
+        val record = iter.next()
+        val recordJson = JSON.parseObject(record)
+        val uid = recordJson.getString("uid")
+        val work_id = recordJson.getString("work_id")
+        val uid_key = date_key + '_' + uid
+        if (!Strings.isNullOrEmpty(uid) && !uid.equalsIgnoreCase("null")) {
+            var finalStr = ""
+            val featureMap = new mutable.HashMap[String, String]()
+            for (elem <- columnList) {
+                val value = recordJson.getDouble(elem)
+                val key = columnMap.get(elem)
+                if (value != null && value > 0.0) {
+                    featureMap.put(key, value.toString)
+                }
+            }
+            finalStr = JSON.toJSONString(featureMap, SerializerFeature.EMPTY: _*)
+            pipe.hset(uid_key, work_id, finalStr)
+            pipe.sadd(date_key, uid_key)
+            pipe.expire(uid_key, jedisExpire)
+            pipe.expire(date_key, jedisExpire)
+            pip_count += 4
+            if (pip_count >= pipeCount) {
+                pipe.sync()
+                pip_count = 0
+            }
+        }
+    }
+    if (pip_count > 0) {
+        pipe.sync()
+    }
+    BDWGRedisUtils.pool.returnResource(jedisp)
+})
+```
+Pipeline对于性能的提升自然不用多说，不使用pipeline的情况下，redis操作需要一条条的执行，redis的set操作很快，但是网络上的消耗则是非常惊人的，用pipeline可以将多条redis操作记录下来，一并发送到redis服务器，节省中间的网络消耗。而且我们的这个例子，全是set和expire操作，并不会产生多线程的问题，因此pipeline是非常合适的。
+pipeline解释了，那partition呢？partition怎么解释？咱们来看foreach和foreachpartition的源码
+```Scala
+def foreach(f: T => Unit): Unit = withScope {
+    val cleanF = sc.clean(f)
+    sc.runJob(this, (iter: Iterator[T]) => iter.foreach(cleanF))
+}
+
+def foreachPartition(f: Iterator[T] => Unit): Unit = withScope {
+    val cleanF = sc.clean(f)
+    sc.runJob(this, (iter: Iterator[T]) => cleanF(iter))
+}
+```
+结合上面version2的code，我们可以发现，使用foreach，会在其内部用迭代器进行代码快的层层执行，若在代码块中有对象的生成和销毁等操作，是比较耗时的，而用foreachPartition呢，传入的参数是一个迭代器，比较耗资源的操作在循环的外面执行，性能会提高很多。
+<br>
+至此，这个问题就算是比较完美的解决了。
+### 结论
+1. 能够用foreachPartition和mapPartition来代替foreach和map的尽量使用foreachPartition、mapPartition
+2. 在不影响一致性的情况下，能够用pipeline的尽量使用pipeline，但是使用pipeline也要注意，一次性不能提交太多，需要用变量进行控制

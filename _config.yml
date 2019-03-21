@@ -55,7 +55,7 @@ ga_track_id: 'UA-89922034-1'            # Format: UA-xxxxxx-xx
 # Sidebar settings
 sidebar: true                           # whether or not using Sidebar.
 sidebar-about-description: "认真学习 n(*≧▽≦*)n <br />拥抱大数据 "
-sidebar-avatar: /assets/img/avatar-kasmine.jpg      # use absolute URL, seeing it's used in both `/` and `/about/`
+sidebar-avatar: img/about-bg-walle.jpg      # use absolute URL, seeing it's used in both `/` and `/about/`
 
 # Catalog settings
 catalog: true
