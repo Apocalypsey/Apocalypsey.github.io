@@ -5,6 +5,7 @@ categories: jekyll update
 title: spark redis性能优化踩坑小记
 author: 小小小罗
 catalog: true
+tags: 性能优化 spark
 ---
 
  最近接手了同事的一部分代码，是对各种特征的离线计算和写入redis，我进行管理和二次开发，在系统中做成天极任务每天定时跑。项目部署完跑起来后发现这个任务跑的时间实在是太久太久了，那没办法，优化呗。
