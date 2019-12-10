@@ -1,0 +1,41 @@
+---
+layout: post
+date: 2019-11-01 11:35:50 +0800
+categories: jekyll update
+title: 记一次使用jstack排查Java性能
+author: 小小小罗
+catalog: true
+tags: 性能排查 Java jstack
+---
+
+### 背景
+
+前段时间接手了一份项目组内自己使用的小工具，用Java Spring写的，后期添加新功能，做一些迭代优化。
+
+在一次新功能上线后，突然发现有时候网页加载会卡顿几秒，一直在load状态，过一小会儿刷新后又恢复正常。虽然是自己用的小工具，但是这也太奇怪了，有点不太对劲，所以就开始着重的去排查问题在哪儿。
+
+### 服务器状态检查
+
+在linux环境下，首先使用top命令进行CPU使用率检查，结果如下所示
+
+![img](/img/in-post/jstack/jstack_1.jpg)
+
+可以看到2264这个Java进程基本上把整个服务器的CPU都跑满了，难怪偶尔服务器会要等几秒钟才会作出响应。
+
+### 定位问题
+
+验证了自己猜想结果正确后，需要定位到具体问题出现在哪个地方了，有可能是程序出现了死循环，有可能是请求量太大等等（在现在这个场景下，并发量高这个情况可以忽略，因为是自己使用的工具，但是在其他情况下，也要考虑这个因素）
+
+接下来结合jstack分析具体哪儿出了问题
+
+上图可知2264这个进程CPU使用率高，现在需要找到该进程下哪个线程使用率高，使用ps -mp 2264 -o THREAD,tid,time | sort -rn
+
+![img](/img/in-post/jstack/jstack_2.jpg)
+
+将需要的TID转成16进制格式printf "%x\n"，然后使用jstack命令打印堆栈信息
+
+![img](/img/in-post/jstack/jstack_3.jpg)
+
+![img](/img/in-post/jstack/jstack_9.jpg)
+
+找到具体哪一行代码之后检查Code，重新发布后解决问题

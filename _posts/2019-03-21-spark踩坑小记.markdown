@@ -2,7 +2,7 @@
 layout: post
 date: 2019-03-21 15:27:50 +0800
 categories: jekyll update
-title: spark redis性能优化踩坑小记
+title: Spark Redis性能优化踩坑小记
 author: 小小小罗
 catalog: true
 tags: 性能优化 spark
